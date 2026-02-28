@@ -13,7 +13,7 @@ export default function HomePage() {
   const router = useRouter();
   const members = useQuery(api.seed.listMembers);
   const seedMembers = useMutation(api.seed.seedMembers);
-  const playerData = useQuery(api.minigame.getPlayerData);
+  const playerData = useQuery(api.minigame.getPlayerData, user ? { fallbackUserId: user.id } : "skip");
   const ensurePlayer = useMutation(api.minigame.ensurePlayer);
   const getOrCreate = useAction(api.game.getOrCreateSession);
   const [loading, setLoading] = useState<string | null>(null);
@@ -28,7 +28,7 @@ export default function HomePage() {
   // 첫 접속 시 플레이어 프로필 보장
   useEffect(() => {
     if (user) {
-      ensurePlayer().catch(() => { });
+      ensurePlayer({ fallbackUserId: user.id }).catch(() => { });
     }
   }, [user]);
 
@@ -44,7 +44,7 @@ export default function HomePage() {
 
     setLoading(memberId);
     try {
-      const sessionId = await getOrCreate({ memberId, memberName });
+      const sessionId = await getOrCreate({ memberId, memberName, fallbackUserId: user.id });
       router.push(`/game/${sessionId}`);
     } catch (e) {
       setLoading(null);

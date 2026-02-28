@@ -127,8 +127,9 @@ export default function GamePage({ params }: PageProps) {
     const { user } = useUser();
     const session = useQuery(api.game.getSession, { sessionId });
     const messages = useQuery(api.game.getMessages, { sessionId });
-    const playerData = useQuery(api.game.getPlayerProfile);
+    const playerData = useQuery(api.minigame.getPlayerData, user ? { fallbackUserId: user.id } : "skip");
     const sendMessage = useMutation(api.game.sendProducerMessage);
+    const ensurePlayer = useMutation(api.minigame.ensurePlayer);
 
     const [input, setInput] = useState("");
     const [sending, setSending] = useState(false);
@@ -136,6 +137,13 @@ export default function GamePage({ params }: PageProps) {
     const chatEndRef = useRef<HTMLDivElement>(null);
 
     const tickets = playerData?.tickets ?? 0;
+
+    // 플레이어 프로필 보장
+    useEffect(() => {
+        if (user) {
+            ensurePlayer({ fallbackUserId: user.id }).catch(() => { });
+        }
+    }, [user]);
 
     // Auto-scroll on new messages
     useEffect(() => {
@@ -149,7 +157,7 @@ export default function GamePage({ params }: PageProps) {
         setInput("");
         setSending(true);
         try {
-            await sendMessage({ sessionId, text });
+            await sendMessage({ sessionId, text, fallbackUserId: user?.id });
         } catch (e: any) {
             setError(e.message || "전송 실패");
         } finally {

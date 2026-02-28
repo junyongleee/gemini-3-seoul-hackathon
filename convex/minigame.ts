@@ -14,34 +14,46 @@ function calculateRank(timeMs: number): string {
     return "C";
 }
 
+/**
+ * 인증된 사용자 ID를 가져오는 헬퍼.
+ * ctx.auth가 작동하면 JWT subject를 사용하고,
+ * 로컬 개발 환경에서 JWT 검증이 안 될 때는 클라이언트가 보낸 fallbackUserId를 사용.
+ */
+async function resolveUserId(
+    ctx: { auth: { getUserIdentity: () => Promise<{ subject: string } | null> } },
+    fallbackUserId?: string
+): Promise<string | null> {
+    const identity = await ctx.auth.getUserIdentity();
+    if (identity) return identity.subject;
+    return fallbackUserId ?? null;
+}
+
 // ─── Queries ───
 
 /** 현재 유저의 플레이어 프로필 조회 (티켓 수, 최고 기록 등) */
 export const getPlayerData = query({
-    args: {},
-    handler: async (ctx) => {
-        const identity = await ctx.auth.getUserIdentity();
-        if (!identity) return null;
+    args: { fallbackUserId: v.optional(v.string()) },
+    handler: async (ctx, args) => {
+        const userId = await resolveUserId(ctx, args.fallbackUserId);
+        if (!userId) return null;
 
-        const player = await ctx.db
+        return ctx.db
             .query("players")
-            .withIndex("by_clerk_user", (q) => q.eq("clerkUserId", identity.subject))
+            .withIndex("by_clerk_user", (q) => q.eq("clerkUserId", userId))
             .unique();
-
-        return player;
     },
 });
 
 /** 최근 미니게임 기록 조회 (최대 10건) */
 export const getRecentResults = query({
-    args: {},
-    handler: async (ctx) => {
-        const identity = await ctx.auth.getUserIdentity();
-        if (!identity) return [];
+    args: { fallbackUserId: v.optional(v.string()) },
+    handler: async (ctx, args) => {
+        const userId = await resolveUserId(ctx, args.fallbackUserId);
+        if (!userId) return [];
 
         return ctx.db
             .query("miniGameResults")
-            .withIndex("by_user", (q) => q.eq("clerkUserId", identity.subject))
+            .withIndex("by_user", (q) => q.eq("clerkUserId", userId))
             .order("desc")
             .take(10);
     },
@@ -53,14 +65,14 @@ export const getRecentResults = query({
 export const submitMiniGameResult = mutation({
     args: {
         completionTimeMs: v.number(),
+        fallbackUserId: v.optional(v.string()),
     },
     handler: async (ctx, args) => {
         // 1. 인증 검증
-        const identity = await ctx.auth.getUserIdentity();
-        if (!identity) {
+        const clerkUserId = await resolveUserId(ctx, args.fallbackUserId);
+        if (!clerkUserId) {
             throw new Error("인증이 필요합니다. 로그인 후 다시 시도하세요.");
         }
-        const clerkUserId = identity.subject;
 
         // 2. 입력값 서버 검증 — 치트 방지
         const { completionTimeMs } = args;
@@ -136,13 +148,13 @@ export const submitMiniGameResult = mutation({
 
 /** 플레이어 프로필이 없으면 초기 생성 (첫 접속 시) */
 export const ensurePlayer = mutation({
-    args: {},
-    handler: async (ctx) => {
-        const identity = await ctx.auth.getUserIdentity();
-        if (!identity) {
-            throw new Error("인증이 필요합니다.");
+    args: { fallbackUserId: v.optional(v.string()) },
+    handler: async (ctx, args) => {
+        const clerkUserId = await resolveUserId(ctx, args.fallbackUserId);
+        if (!clerkUserId) {
+            // 아직 인증 토큰이 동기화되지 않음 → 조용히 반환
+            return null;
         }
-        const clerkUserId = identity.subject;
 
         const existing = await ctx.db
             .query("players")

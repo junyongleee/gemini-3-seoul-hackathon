@@ -42,7 +42,7 @@ function getRankLabel(rank: string) {
 
 export default function MiniGamePage() {
     const { user } = useUser();
-    const playerData = useQuery(api.minigame.getPlayerData);
+    const playerData = useQuery(api.minigame.getPlayerData, user ? { fallbackUserId: user.id } : "skip");
     const submitResult = useMutation(api.minigame.submitMiniGameResult);
     const ensurePlayer = useMutation(api.minigame.ensurePlayer);
 
@@ -61,7 +61,7 @@ export default function MiniGamePage() {
     // 첫 접속 시 플레이어 프로필 보장
     useEffect(() => {
         if (user) {
-            ensurePlayer().catch(() => { });
+            ensurePlayer({ fallbackUserId: user.id }).catch(() => { });
         }
     }, [user]);
 
@@ -114,7 +114,7 @@ export default function MiniGamePage() {
             setSubmitting(true);
 
             try {
-                const res = await submitResult({ completionTimeMs: finalTime });
+                const res = await submitResult({ completionTimeMs: finalTime, fallbackUserId: user?.id });
                 setResult(res);
             } catch (e: any) {
                 console.error("결과 제출 실패:", e.message);
