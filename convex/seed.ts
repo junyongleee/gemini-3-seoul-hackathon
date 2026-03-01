@@ -19,6 +19,7 @@ export const seedMembers = mutation({
                 colorFrom: "#7c3aed",
                 colorTo: "#4f46e5",
                 emoji: "🎤",
+                avatarUrl: "https://api.dicebear.com/7.x/adventurer/svg?seed=Lia&backgroundColor=7c3aed",
             },
             {
                 name: "서윤 (Seoyun)",
@@ -30,6 +31,7 @@ export const seedMembers = mutation({
                 colorFrom: "#06b6d4",
                 colorTo: "#0891b2",
                 emoji: "💃",
+                avatarUrl: "https://api.dicebear.com/7.x/adventurer/svg?seed=Seoyun&backgroundColor=06b6d4",
             },
             {
                 name: "미나 (Mina)",
@@ -41,6 +43,7 @@ export const seedMembers = mutation({
                 colorFrom: "#ec4899",
                 colorTo: "#db2777",
                 emoji: "🌹",
+                avatarUrl: "https://api.dicebear.com/7.x/adventurer/svg?seed=Mina&backgroundColor=ec4899",
             },
             {
                 name: "하나 (Hana)",
@@ -52,6 +55,7 @@ export const seedMembers = mutation({
                 colorFrom: "#f59e0b",
                 colorTo: "#d97706",
                 emoji: "🎧",
+                avatarUrl: "https://api.dicebear.com/7.x/adventurer/svg?seed=Hana&backgroundColor=f59e0b",
             },
             {
                 name: "지우 (Jiwoo)",
@@ -63,6 +67,7 @@ export const seedMembers = mutation({
                 colorFrom: "#10b981",
                 colorTo: "#059669",
                 emoji: "⚡",
+                avatarUrl: "https://api.dicebear.com/7.x/adventurer/svg?seed=Jiwoo&backgroundColor=10b981",
             },
         ];
 

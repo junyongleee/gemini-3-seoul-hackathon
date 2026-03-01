@@ -1,5 +1,6 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { resolveUserId } from "./lib/auth";
 
 // ─── Constants ───
 const INITIAL_TICKETS = 10;
@@ -14,18 +15,11 @@ function calculateRank(timeMs: number): string {
     return "C";
 }
 
-/**
- * 인증된 사용자 ID를 가져오는 헬퍼.
- * ctx.auth가 작동하면 JWT subject를 사용하고,
- * 로컬 개발 환경에서 JWT 검증이 안 될 때는 클라이언트가 보낸 fallbackUserId를 사용.
- */
-async function resolveUserId(
-    ctx: { auth: { getUserIdentity: () => Promise<{ subject: string } | null> } },
-    fallbackUserId?: string
-): Promise<string | null> {
-    const identity = await ctx.auth.getUserIdentity();
-    if (identity) return identity.subject;
-    return fallbackUserId ?? null;
+function calculateInfluenceLevel(totalGames: number): number {
+    if (totalGames >= 20) return 4;
+    if (totalGames >= 10) return 3;
+    if (totalGames >= 5) return 2;
+    return 1;
 }
 
 // ─── Queries ───
@@ -116,9 +110,11 @@ export const submitMiniGameResult = mutation({
             .unique();
 
         if (existingPlayer) {
+            const newTotal = existingPlayer.totalGamesPlayed + 1;
             await ctx.db.patch(existingPlayer._id, {
                 tickets: existingPlayer.tickets + ticketsAwarded,
-                totalGamesPlayed: existingPlayer.totalGamesPlayed + 1,
+                totalGamesPlayed: newTotal,
+                influenceLevel: calculateInfluenceLevel(newTotal),
                 bestTime:
                     existingPlayer.bestTime === undefined || completionTimeMs < existingPlayer.bestTime
                         ? completionTimeMs
@@ -163,10 +159,34 @@ export const ensurePlayer = mutation({
 
         if (existing) return existing._id;
 
-        return ctx.db.insert("players", {
+        const newPlayerId = await ctx.db.insert("players", {
             clerkUserId,
             tickets: INITIAL_TICKETS,
             totalGamesPlayed: 0,
+            influenceLevel: 1,
+            egoShards: 0,
+            dataCores: 0,
+            coreFandom: 0,
+            casualFandom: 0,
         });
+
+        // 🌟 처음 가입 시 기본 1성 카드 5장(전 멤버) 일괄 지급
+        const members = await ctx.db.query("members").collect();
+        for (const m of members) {
+            await ctx.db.insert("cards", {
+                playerId: clerkUserId,
+                memberId: m._id,
+                cardName: `기본 ${m.nameEn}`,
+                rarity: 1,
+                level: 1,
+                hr_vocal: 30,
+                rh_dance: 30,
+                ca_charisma: 30,
+                unlockedNodes: [],
+                avatarUrl: m.avatarUrl, // 기본 카드 이미지로 멤버 아바타 풀 사용
+            });
+        }
+
+        return newPlayerId;
     },
 });

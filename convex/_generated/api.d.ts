@@ -10,8 +10,11 @@
 
 import type * as ai from "../ai.js";
 import type * as game from "../game.js";
+import type * as lib_auth from "../lib/auth.js";
 import type * as minigame from "../minigame.js";
+import type * as persona from "../persona.js";
 import type * as seed from "../seed.js";
+import type * as sns from "../sns.js";
 
 import type {
   ApiFromModules,
@@ -22,8 +25,11 @@ import type {
 declare const fullApi: ApiFromModules<{
   ai: typeof ai;
   game: typeof game;
+  "lib/auth": typeof lib_auth;
   minigame: typeof minigame;
+  persona: typeof persona;
   seed: typeof seed;
+  sns: typeof sns;
 }>;
 
 /**

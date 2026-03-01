@@ -4,11 +4,59 @@ import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 
-// Gemini REST API 직접 호출 (SDK 제거 → Windows ESM 오류 해결)
+const STAT_CHANGE_LIMIT = 15;
+const VALID_MOODS = ["accept", "reject", "passive", "counter_offer", "angry"] as const;
+
+function seededRandom(seed: string, index: number): number {
+    let hash = 0;
+    const s = seed + String(index);
+    for (let i = 0; i < s.length; i++) {
+        hash = ((hash << 5) - hash + s.charCodeAt(i)) | 0;
+    }
+    return Math.abs(hash % 100) / 100;
+}
+
+function clampDelta(d: number): number {
+    return Math.max(-STAT_CHANGE_LIMIT, Math.min(STAT_CHANGE_LIMIT, d));
+}
+
+function normalizeMood(raw: string): string {
+    if ((VALID_MOODS as readonly string[]).includes(raw)) return raw;
+    function dist(a: string, b: string): number {
+        const m = a.length, n = b.length;
+        const dp: number[][] = Array.from({ length: m + 1 }, (_, i) =>
+            Array.from({ length: n + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0))
+        );
+        for (let i = 1; i <= m; i++)
+            for (let j = 1; j <= n; j++)
+                dp[i][j] = Math.min(
+                    dp[i - 1][j] + 1,
+                    dp[i][j - 1] + 1,
+                    dp[i - 1][j - 1] + (a[i - 1] !== b[j - 1] ? 1 : 0)
+                );
+        return dp[m][n];
+    }
+    let best = "passive";
+    let bestDist = Infinity;
+    for (const m of VALID_MOODS) {
+        const d = dist(raw.toLowerCase(), m);
+        if (d < bestDist) { best = m; bestDist = d; }
+    }
+    return best;
+}
+
+function sanitizeSvg(svg: string): string {
+    return svg
+        .replace(/<script[\s\S]*?<\/script>/gi, "")
+        .replace(/<foreignObject[\s\S]*?<\/foreignObject>/gi, "")
+        .replace(/\bon\w+\s*=\s*"[^"]*"/gi, "")
+        .replace(/\bon\w+\s*=\s*'[^']*'/gi, "")
+        .replace(/javascript\s*:/gi, "");
+}
+
 async function callGemini(apiKey: string, prompt: string, responseMimeType?: string): Promise<string> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
-    // JSON 스키마를 명시적으로 주입하여 중간에 잘리는 현상 방지
     const expectedSchema = responseMimeType === "application/json" ? {
         type: "OBJECT",
         properties: {
@@ -16,16 +64,21 @@ async function callGemini(apiKey: string, prompt: string, responseMimeType?: str
             stat_changes: {
                 type: "OBJECT",
                 properties: {
-                    vocal: { type: "INTEGER" },
-                    dance: { type: "INTEGER" },
                     stress: { type: "INTEGER" },
                     ego: { type: "INTEGER" },
                     motivation: { type: "INTEGER" }
                 }
             },
+            rewards: {
+                type: "OBJECT",
+                properties: {
+                    egoShards: { type: "INTEGER" },
+                    dataCores: { type: "INTEGER" }
+                }
+            },
             mood: { type: "STRING" }
         },
-        required: ["reply_text", "stat_changes", "mood"]
+        required: ["reply_text", "stat_changes", "rewards", "mood"]
     } : undefined;
 
     const res = await fetch(url, {
@@ -33,44 +86,34 @@ async function callGemini(apiKey: string, prompt: string, responseMimeType?: str
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
-            // 캐릭터의 까칠한 답변이 안전 필터에 걸려 강제 종료되는 것을 방지
             safetySettings: [
                 { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
                 { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
                 { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+                { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+                { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" }
             ],
             generationConfig: {
                 temperature: 0.9,
-                maxOutputTokens: 2048, // 토큰 제한도 더 여유롭게 상향
+                maxOutputTokens: 1024,
                 ...(responseMimeType ? { responseMimeType } : {}),
                 ...(expectedSchema ? { responseSchema: expectedSchema } : {}),
             },
         }),
     });
 
-    if (!res.ok) {
-        // 404 에러가 나면 여기서 상세 내용을 출력하도록 로그를 추가했습니다.
-        const errorDetail = await res.text();
-        console.error("Gemini 상세 에러 내용:", errorDetail);
-        throw new Error(`Gemini API error: ${res.status} - ${errorDetail}`);
-    }
-
+    if (!res.ok) throw new Error(`Gemini API error: ${res.status}`);
     const json = await res.json();
-
-    // 응답 구조가 가끔 다를 수 있으므로 안전하게 접근합니다.
-    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-        console.error("Gemini 응답 구조 이상:", JSON.stringify(json));
-        return "";
-    }
+    const candidate = json.candidates?.[0];
+    if (candidate?.finishReason === "SAFETY") throw new Error("SAFETY_BLOCKED");
+    const text = candidate?.content?.parts?.[0]?.text;
+    if (!text) throw new Error("EMPTY_RESPONSE");
     return text;
 }
 
-// Step 1: AI 텍스트 응답 생성 + 스탯 변화 계산 (빠른 응답 우선)
 export const negotiateSchedule = internalAction({
     args: {
-        sessionId: v.id("gameSessions"),
+        sessionId: v.id("negotiations"),
         userInput: v.string(),
         memberName: v.string(),
         personality: v.string(),
@@ -84,76 +127,74 @@ export const negotiateSchedule = internalAction({
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) throw new Error("GEMINI_API_KEY not set");
 
-        // 텍스트 전용 프롬프트 (SVG 제외 → 토큰 절감)
-        const textPrompt = `You are ${args.memberName}, an independent K-Pop idol with a strong 'Ego'. The user is your producer.
+        const textPrompt = `You are ${args.memberName}, an independent K-Pop idol. The user is your producer proposing a schedule or activity.
+이 대화는 지시가 아니라 '협상'입니다.
 
 성격: ${args.personality}
 
-현재 스탯:
-- 자아(Ego): ${args.ego}/100
-- 스트레스(Stress): ${args.stress}/100
+현재 당신의 상태 (0~100):
+- 자아(Ego): ${args.ego}/100 (높을수록 자신의 주관 뚜렷, 낮을수록 순응)
+- 스트레스(Stress): ${args.stress}/100 
 - 동기부여(Motivation): ${args.motivation}/100
-- 보컬(Vocal): ${args.vocal}/100
-- 댄스(Dance): ${args.dance}/100
 
 프로듀서의 제안: "${args.userInput}"
 
 행동 지침:
-- 자아가 70 이상이고 제안이 자신의 가치관과 안 맞으면 → 강하게 거절 또는 역제안
-- 스트레스가 80 이상이면 → 날카롭거나 감정적으로 반응
-- 동기부여가 30 이하면 → 무기력하고 냉담하게 반응
-- 좋은 제안이면 → 진심으로 수락하며 에너지 있게 반응
+- 자아가 높고 스트레스가 높다면 무리한 제안은 "reject" 하거나 "counter_offer"(역제안)를 하세요.
+- 제안이 합리적이고 동기부여가 된다면 "accept" 하세요.
+- 평가에 따라 추가 보상(rewards: egoShards, dataCores) 재화를 0~10 사이로 산정하여 지급해 주세요. (거절할 경우 0으로 세팅)
 
-반드시 아래 JSON 형식으로만 응답하세요. JSON 외 어떤 텍스트도 출력하지 마세요:
-{
-  "reply_text": "한국어로 캐릭터답게 자연스러운 반응 (3문장 이내)",
-  "stat_changes": {"vocal": 0, "dance": 0, "stress": 0, "ego": 0, "motivation": 0},
-  "mood": "reject|accept|passive|angry"
-}`;
+JSON 응답 형식: { "reply_text": "결과 대사", "stat_changes": {"stress": 0, "ego": 0, "motivation": 0}, "rewards": {"egoShards": 5, "dataCores": 3}, "mood": "accept|reject|counter_offer|passive|angry" }
 
+JSON:`;
+
+        const seed = args.sessionId + args.userInput;
         let replyText = "...잠시 생각 중이에요.";
-        let statChanges = { vocal: 0, dance: 0, stress: 5, ego: 0, motivation: -2 };
+        let statChanges = { stress: 0, ego: 0, motivation: 0 };
+        let rewards = { egoShards: 0, dataCores: 0, isBreakthrough: false };
         let mood = "passive";
 
         try {
             const raw = await callGemini(apiKey, textPrompt, "application/json");
-            const cleaned = raw
-                .replace(/^```json\s*/i, "")
-                .replace(/^```\s*/i, "")
-                .replace(/```\s*$/i, "")
-                .trim();
-
-            let parsed;
-            try {
-                parsed = JSON.parse(cleaned);
-            } catch (parseError) {
-                console.error("JSON 파싱 에러 발생! AI 응답 원본:", raw);
-                throw parseError;
-            }
+            const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+            const parsed = JSON.parse(cleaned);
 
             replyText = parsed.reply_text || replyText;
-            mood = parsed.mood || "passive";
+            mood = normalizeMood(parsed.mood || "passive");
+
             const rc = parsed.stat_changes || {};
             statChanges = {
-                vocal: Number(rc.vocal) || 0,
-                dance: Number(rc.dance) || 0,
-                stress: Number(rc.stress) || 0,
-                ego: Number(rc.ego) || 0,
-                motivation: Number(rc.motivation) || 0,
+                stress: clampDelta(Number(rc.stress) || 0),
+                ego: clampDelta(Number(rc.ego) || 0),
+                motivation: clampDelta(Number(rc.motivation) || 0),
             };
+
+            const isSuccess = (mood === "accept" || mood === "counter_offer");
+            if (isSuccess) {
+                const baseShards = 10 + Math.floor(seededRandom(seed, 1) * 11); // 10~20
+                const aiBonus = (parsed.rewards && typeof parsed.rewards.egoShards === 'number') ? Math.min(10, Math.max(0, parsed.rewards.egoShards)) : 0;
+                rewards.egoShards = baseShards + aiBonus;
+                rewards.dataCores = 5 + Math.floor(seededRandom(seed, 2) * 6);
+            } else {
+                rewards.egoShards = 1 + Math.floor(seededRandom(seed, 3) * 2); // 1~2 위로금
+                rewards.dataCores = 0;
+            }
+
+            rewards.isBreakthrough = (isSuccess && ((statChanges.ego >= 5) || (statChanges.motivation >= 8)));
         } catch (e: any) {
-            replyText = `(시스템 오류: ${e.message?.slice(0, 60)})`;
+            console.error("AI 파싱 에러 (Fallback 적용):", e.message);
+            const fallbacks = ["...지금은 할 말이 없어요.", "정리하고 나중에 답변할게요."];
+            replyText = fallbacks[Math.floor(seededRandom(seed, 4) * fallbacks.length)];
         }
 
-        // 텍스트 응답 먼저 저장 (빠른 UX)
         await ctx.runMutation(internal.game.applyStatChanges, {
             sessionId: args.sessionId,
             statChanges,
+            rewards,
             replyText,
-            svgAnimation: "", // 먼저 빈 값으로 저장
+            svgAnimation: "",
         });
 
-        // SVG 생성은 비동기로 별도 처리 (UX 블로킹 없음)
         await ctx.scheduler.runAfter(0, internal.ai.generateSvg, {
             sessionId: args.sessionId,
             mood,
@@ -162,42 +203,24 @@ export const negotiateSchedule = internalAction({
     },
 });
 
-// Step 2: SVG 배경 생성 (별도 액션, 텍스트 응답과 독립 실행)
 export const generateSvg = internalAction({
     args: {
-        sessionId: v.id("gameSessions"),
+        sessionId: v.id("negotiations"),
         mood: v.string(),
         memberName: v.string(),
     },
     handler: async (ctx, args) => {
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) return;
-
-        const svgPrompt = `Create a stunning SVG animation background for a K-Pop idol game.
-Mood: ${args.mood} (reject=angry red/orange, accept=purple/gold glow, passive=gray/blue drift, angry=red noise shake)
-Character: ${args.memberName}
-
-Requirements:
-- Full-screen SVG with width="100%" height="100%"
-- Include <style> with CSS @keyframes animations
-- Beautiful particle system with at least 8 animated elements
-- Mood-appropriate colors and movement
-- Only output the SVG element, no other text
-
-SVG:`;
-
+        const svgPrompt = `Create a stunning background effect SVG for a K-Pop idol game. Mood: ${args.mood}. Name: ${args.memberName}. Must be full-screen 100% width and height, beautiful glows, single SVG element.`;
         try {
             const svgRaw = await callGemini(apiKey, svgPrompt);
             const svgMatch = svgRaw.match(/<svg[\s\S]*<\/svg>/i);
             if (!svgMatch) return;
-            const svg = svgMatch[0];
-
             await ctx.runMutation(internal.game.updateSvg, {
                 sessionId: args.sessionId,
-                svg,
+                svg: sanitizeSvg(svgMatch[0]),
             });
-        } catch {
-            // SVG는 실패해도 게임 진행에 영향 없음
-        }
+        } catch { /* Ignored */ }
     },
 });

@@ -7,38 +7,34 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Id } from "../../convex/_generated/dataModel";
 import Link from "next/link";
+import Image from "next/image";
+import BottomNav from "../components/BottomNav";
 
 export default function HomePage() {
   const { user, isLoaded } = useUser();
   const router = useRouter();
+
   const members = useQuery(api.seed.listMembers);
   const seedMembers = useMutation(api.seed.seedMembers);
-  const playerData = useQuery(api.minigame.getPlayerData, user ? { fallbackUserId: user.id } : "skip");
-  const ensurePlayer = useMutation(api.minigame.ensurePlayer);
-  const getOrCreate = useAction(api.game.getOrCreateSession);
+  const playerData = useQuery(api.game.getPlayerProfile, user ? { fallbackUserId: user.id } : "skip");
+  const getOrCreate = useMutation(api.game.getOrCreateSession);
+  const cards = useQuery(api.game.getUserCards, user ? { fallbackUserId: user.id } : "skip");
+
   const [loading, setLoading] = useState<string | null>(null);
 
-  // members가 로드됐고 비어있을 때만 seed 실행 (중복 호출 방지)
+  const cardMap = new Map(cards?.map((c) => [c.memberId, c]));
+
   useEffect(() => {
     if (members !== undefined && members.length === 0) {
       seedMembers();
     }
-  }, [members]);
-
-  // 첫 접속 시 플레이어 프로필 보장
-  useEffect(() => {
-    if (user) {
-      ensurePlayer({ fallbackUserId: user.id }).catch(() => { });
-    }
-  }, [user]);
+  }, [members, seedMembers]);
 
   const handleSelectMember = async (memberId: Id<"members">, memberName: string) => {
     if (!user) return;
 
-    // 티켓 체크
     if (!playerData || playerData.tickets <= 0) {
-      alert("대화 티켓이 부족합니다! 미니게임을 클리어하여 티켓을 획득하세요.");
-      router.push("/minigame");
+      alert("대화 티켓이 부족합니다! 획득처를 확인해주세요.");
       return;
     }
 
@@ -52,157 +48,193 @@ export default function HomePage() {
   };
 
   const tickets = playerData?.tickets ?? 0;
+  const influenceLevel = playerData?.influenceLevel ?? 1;
+  const egoShards = playerData?.egoShards ?? 0;
+  const dataCores = playerData?.dataCores ?? 0;
 
   return (
-    <div className="min-h-screen w-full bg-grid flex flex-col items-center" style={{ background: "var(--bg-primary)" }}>
-      {/* Ambient orbs */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 rounded-full opacity-10 blur-3xl"
-          style={{ background: "radial-gradient(circle, #7c3aed, transparent)" }} />
-        <div className="absolute bottom-1/3 right-1/4 w-64 h-64 rounded-full opacity-10 blur-3xl"
-          style={{ background: "radial-gradient(circle, #ec4899, transparent)" }} />
+    <div className="h-screen w-full flex flex-col relative overflow-hidden">
+
+      {/* ── Background: Group Image ── */}
+      <div className="absolute inset-0 z-0 flex items-center justify-center">
+        <Image
+          src="/velo_members_new.png"
+          alt="VELO Members"
+          fill
+          priority
+          className="object-cover object-[center_15%] sm:object-[center_30%]"
+        />
+        {/* Gradient overlay from bottom */}
+        <div className="absolute inset-0" style={{
+          background: "linear-gradient(to top, rgba(5,5,16,0.95) 0%, rgba(5,5,16,0.5) 20%, transparent 40%)"
+        }} />
+        {/* Side neon accents */}
+        <div className="absolute top-10 left-6 z-10 text-shadow-glow">
+          <div className="text-5xl font-black tracking-wider text-purple-300">VELO</div>
+          <div className="text-[10px] text-purple-300/60 tracking-[0.3em] mt-0.5">VIRTUAL IDOL MANAGEMENT</div>
+        </div>
       </div>
 
-      {/* Nav */}
-      <nav className="glass sticky top-0 z-50 px-6 py-4 flex items-center justify-between w-full">
+      {/* ── Top HUD Bar ── */}
+      <nav className="relative z-20 flex items-center justify-between px-5 py-3" style={{
+        background: "linear-gradient(180deg, rgba(5,5,16,0.9) 0%, rgba(5,5,16,0.3) 100%)"
+      }}>
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-gradient-to-br from-purple-600 to-pink-500 pulse-glow" />
-          <div>
-            <span className="text-lg font-black gradient-text">VELO</span>
-            <span className="text-xs text-gray-500 ml-2">아이돌 육성 시뮬레이션</span>
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shadow-lg" style={{
+            background: "linear-gradient(135deg, #7c3aed, #4f46e5)",
+          }}>👑</div>
+          <div className="flex flex-col justify-center">
+            <div className="text-[10px] text-purple-300 font-bold tracking-widest uppercase mb-0.5">Influence Level</div>
+            <div className="flex items-center gap-3">
+              <div className="text-xl font-black text-white leading-none">Lv.{influenceLevel}</div>
+              <div className="w-24 h-2 bg-black/60 rounded-full overflow-hidden border border-white/10 shadow-inner relative">
+                <div className="absolute inset-y-0 left-0 bg-gradient-to-r from-purple-500 to-pink-500 animate-pulse" style={{ width: '65%' }} />
+              </div>
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <SignedIn>
-            {/* Ticket Count */}
-            <div className="glass rounded-full px-3 py-1.5 text-xs border border-yellow-500/20 flex items-center gap-1.5">
-              <span>🎫</span>
-              <span className="text-yellow-400 font-bold">{tickets}</span>
+
+        <div className="flex items-center gap-2">
+          {/* Fandom Currencies */}
+          <div className="hidden sm:flex items-center gap-3 mr-2 bg-black/40 backdrop-blur-md px-4 py-1.5 rounded-full border border-white/10">
+            <div className="flex items-center gap-1.5 text-xs">
+              <span>💎</span>
+              <span className="text-purple-300 font-bold">{egoShards}</span>
             </div>
-            <UserButton afterSignOutUrl="/" />
+            <div className="w-px h-3 bg-white/20" />
+            <div className="flex items-center gap-1.5 text-xs">
+              <span>💿</span>
+              <span className="text-blue-300 font-bold">{dataCores}</span>
+            </div>
+          </div>
+
+          {/* Tickets */}
+          <div className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs shadow-inner" style={{
+            background: "rgba(234,179,8,0.15)", border: "1px solid rgba(234,179,8,0.3)"
+          }}>
+            <span>🎟️</span>
+            <span className="text-yellow-400 font-bold">{tickets}</span>
+            <Link href="/minigame" className="text-yellow-500 hover:text-yellow-300 text-[10px] ml-0.5 font-black">+</Link>
+          </div>
+
+          <SignedIn>
+            <div className="ml-2 border-2 border-purple-500/30 rounded-full p-0.5">
+              <UserButton afterSignOutUrl="/" />
+            </div>
           </SignedIn>
           <SignedOut>
             <SignInButton mode="modal">
-              <button className="btn-shimmer text-white text-sm font-bold px-5 py-2 rounded-full">
-                프로듀서로 시작하기
-              </button>
+              <button className="ml-2 text-xs font-bold text-black bg-white hover:bg-gray-200 px-4 py-1.5 rounded-full transition-colors">LOGIN</button>
             </SignInButton>
           </SignedOut>
         </div>
       </nav>
 
-      {/* Hero */}
-      <main className="flex flex-col items-center w-full max-w-7xl mx-auto px-6 pt-16 pb-10">
-        <div className="relative text-center w-full flex flex-col items-center">
-          <div className="inline-flex items-center gap-2 glass rounded-full px-4 py-1.5 text-xs text-purple-300 mb-5 border border-purple-500/20">
-            <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
-            에이전틱 AI 아이돌 육성 시뮬레이션
-          </div>
-          <h1 className="text-5xl md:text-7xl font-black mb-3 leading-tight">
-            <span className="gradient-text">여러분만의 아이돌을 육성해주세요</span>
-          </h1>
-          <p className="text-center text-gray-400 max-w-xl mt-4 leading-relaxed">
-            미니게임으로 <strong className="text-yellow-400">대화 티켓</strong>을 획득하고,
-            벨로(Velo) 멤버와 <strong className="text-white">전략적 대화</strong>로 성장시키세요.
-          </p>
+      <div className="flex-1 relative z-10" />
+
+      {/* ── Mobile Currency Bar (shown only on small screens) ── */}
+      <div className="absolute top-20 left-0 right-0 z-20 sm:hidden flex justify-center gap-6 px-4 py-2 bg-black/40 backdrop-blur-md">
+        <div className="flex flex-col items-center">
+          <span className="text-[10px] text-gray-400">Ego Shards</span>
+          <span className="text-purple-300 font-bold text-sm">💎 {egoShards}</span>
         </div>
-      </main>
-
-      {/* Mini-game CTA */}
-      <SignedIn>
-        <div className="w-full max-w-5xl mx-auto px-6 mb-8 flex justify-center">
-          <Link
-            href="/minigame"
-            className="glass rounded-2xl px-8 py-5 border border-cyan-500/20 hover:border-cyan-500/50 transition-all hover:scale-[1.02] flex items-center gap-5 max-w-lg w-full"
-          >
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center text-2xl flex-shrink-0 float">
-              🎯
-            </div>
-            <div className="flex-1">
-              <h3 className="text-white font-bold text-base">안무 순발력 훈련</h3>
-              <p className="text-gray-400 text-xs mt-0.5">1~25 숫자를 빠르게 클릭! 클리어하면 대화 티켓 획득</p>
-            </div>
-            <div className="text-right flex-shrink-0">
-              <div className="text-yellow-400 font-bold text-lg">{tickets}장</div>
-              <div className="text-[10px] text-gray-500">보유 티켓</div>
-            </div>
-          </Link>
+        <div className="flex flex-col items-center">
+          <span className="text-[10px] text-gray-400">Data Cores</span>
+          <span className="text-blue-300 font-bold text-sm">💿 {dataCores}</span>
         </div>
-      </SignedIn>
-
-      {/* Member Select */}
-      <div className="w-full max-w-7xl mx-auto px-6 pb-20 flex flex-col items-center">
-        <h2 className="text-center text-sm font-medium text-gray-500 mb-6 tracking-widest uppercase w-full">
-          멤버를 선택하세요
-        </h2>
-
-        {!members ? (
-          <div className="flex justify-center py-16 w-full">
-            <div className="w-12 h-12 border-4 border-purple-600 border-t-transparent rounded-full animate-spin" />
-          </div>
-        ) : (
-          <div className="flex flex-wrap justify-center gap-5 max-w-5xl">
-            {members.map((m) => (
-              <button
-                key={m._id}
-                onClick={() => isLoaded && user ? handleSelectMember(m._id, m.name) : undefined}
-                disabled={loading === m._id}
-                className="w-full sm:w-72 md:w-80 concept-card glass rounded-2xl p-6 text-left border border-white/5 hover:border-white/20 group disabled:opacity-60 flex flex-col justify-between"
-              >
-                {/* Gradient avatar */}
-                <div
-                  className="w-16 h-16 rounded-2xl flex items-center justify-center text-3xl mb-4 float"
-                  style={{ background: `linear-gradient(135deg, ${m.colorFrom}, ${m.colorTo})` }}
-                >
-                  {m.emoji}
-                </div>
-
-                <div className="flex items-start justify-between mb-1">
-                  <div>
-                    <h3 className="text-lg font-bold text-white">{m.name}</h3>
-                    <p className="text-xs font-medium" style={{ color: m.colorFrom }}>{m.position}</p>
-                  </div>
-                  {loading === m._id && (
-                    <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-                  )}
-                </div>
-
-                <p className="text-gray-400 text-xs leading-relaxed mt-2">{m.trait}</p>
-
-                <div className="mt-4 flex items-center justify-between">
-                  <SignedIn>
-                    <span className="text-xs text-purple-400 group-hover:text-purple-300 transition-colors">
-                      {loading === m._id ? "세션 생성 중..." : tickets > 0 ? "선택하기 →" : "🎫 티켓 필요"}
-                    </span>
-                  </SignedIn>
-                  <SignedOut>
-                    <span className="text-xs text-gray-600">로그인 필요</span>
-                  </SignedOut>
-                  <div
-                    className="w-2 h-2 rounded-full"
-                    style={{ background: m.colorFrom, boxShadow: `0 0 8px ${m.colorFrom}` }}
-                  />
-                </div>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {!isLoaded || (!user && isLoaded) ? (
-          <div className="text-center mt-10">
-            <SignInButton mode="modal">
-              <button className="btn-shimmer text-white font-bold text-base px-10 py-4 rounded-full glow-purple hover:scale-105 transition-transform">
-                구글 로그인 후 시작 →
-              </button>
-            </SignInButton>
-          </div>
-        ) : null}
       </div>
 
-      {/* Footer */}
-      <footer className="text-center py-6 text-gray-700 text-xs border-t border-white/5 w-full">
-        Project Phoenix · Powered by Gemini 2.5 Flash & Convex Real-time DB
-      </footer>
+      {/* ── Member Cards Row ── */}
+      <div className="absolute bottom-28 left-0 right-0 z-20 w-full px-4">
+        <div className="flex gap-8 sm:gap-12 md:gap-16 justify-center overflow-x-auto pb-4 min-w-max mx-auto px-4" style={{ scrollbarWidth: "none" }}>
+          {members?.map((m, idx) => {
+            const isLoading = loading === m._id;
+            const borderColors = [
+              "rgba(124,58,237,0.7)",
+              "rgba(6,182,212,0.7)",
+              "rgba(236,72,153,0.7)",
+              "rgba(245,158,11,0.7)",
+              "rgba(16,185,129,0.7)",
+            ];
+
+            const card = cardMap.get(m._id);
+            const hr = card?.hr_vocal ?? 30;
+            const rh = card?.rh_dance ?? 30;
+            const ca = card?.ca_charisma ?? 30;
+            const cardLevel = card?.level ?? 1;
+
+            return (
+              <div
+                key={m._id}
+                className="snap-center flex-shrink-0 rounded-2xl overflow-hidden transition-all duration-300 hover:-translate-y-2 hover:shadow-[0_10px_30px_rgba(124,58,237,0.2)] flex flex-col justify-between"
+                style={{
+                  width: "170px",
+                  background: "rgba(10,10,25,0.6)",
+                  border: `1px solid ${borderColors[idx]}`,
+                  backdropFilter: "blur(16px)",
+                  boxShadow: `inset 0 0 20px ${borderColors[idx].replace("0.7", "0.1")}`
+                }}
+              >
+                <div className="pt-3 flex flex-col h-full justify-between">
+                  <div className="flex flex-col gap-2 px-3 mb-3">
+                    <div className="text-center mt-1">
+                      <div className="font-black text-white text-[22px] leading-tight tracking-wide">{m.nameEn}</div>
+                      <div className="text-[11px] mt-0.5 font-bold tracking-wider" style={{ color: m.colorFrom }}>{m.position}</div>
+                    </div>
+
+                    <div className="flex items-baseline justify-center gap-1.5 pt-2 border-t border-white/10">
+                      <span className="text-[10px] text-gray-400 uppercase tracking-widest font-bold">LV.</span>
+                      <span className="text-2xl font-black text-white leading-none">{cardLevel}</span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1 px-1">
+                      <div className="bg-white/5 rounded p-1.5 text-center">
+                        <div className="text-[9px] text-purple-300 font-bold">HR</div>
+                        <div className="text-sm text-white font-black mt-0.5">{hr}</div>
+                      </div>
+                      <div className="bg-white/5 rounded p-1.5 text-center">
+                        <div className="text-[9px] text-blue-300 font-bold">RH</div>
+                        <div className="text-sm text-white font-black mt-0.5">{rh}</div>
+                      </div>
+                      <div className="bg-white/5 rounded p-1.5 text-center">
+                        <div className="text-[9px] text-yellow-300 font-bold">CA</div>
+                        <div className="text-sm text-white font-black mt-0.5">{ca}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="text-center mt-auto w-full">
+                    <SignedIn>
+                      <button
+                        onClick={() => handleSelectMember(m._id, m.name)}
+                        disabled={isLoading}
+                        className="w-full py-2.5 text-[15px] font-bold uppercase tracking-widest transition-all duration-300 hover:brightness-110 active:scale-95 shadow-lg group relative overflow-hidden rounded-t-none rounded-b-xl"
+                        style={{ background: `linear-gradient(135deg, ${m.colorFrom}, ${m.colorTo})` }}
+                      >
+                        <div className="absolute inset-0 bg-white/20 translate-y-full group-hover:translate-y-0 transition-transform duration-300" />
+                        {isLoading ? (
+                          <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mx-auto relative z-10" />
+                        ) : (
+                          <span className="relative z-10 text-white drop-shadow-md">대화하기</span>
+                        )}
+                      </button>
+                    </SignedIn>
+                    <SignedOut>
+                      <SignInButton mode="modal">
+                        <button className="w-full py-2.5 text-[15px] font-bold uppercase tracking-widest bg-white/10 text-gray-300 hover:bg-white/20 hover:text-white transition-colors rounded-t-none rounded-b-xl">
+                          로그인
+                        </button>
+                      </SignInButton>
+                    </SignedOut>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <BottomNav />
     </div>
   );
 }
